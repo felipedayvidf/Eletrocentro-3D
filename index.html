@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Carreta Eletrocentro 3D</title>
+<style>
+  body { margin: 0; font-family: Arial, sans-serif; background: #f5f5f3; color: #222; }
+  header { padding: 12px 16px; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 8px; }
+  #wrap { position: relative; width: 100%; height: 70vh; cursor: grab; touch-action: none; background: #eef1f4; }
+  #wrap:active { cursor: grabbing; }
+  .lb { position: absolute; transform: translate(-50%, -100%); font-size: 12px; font-weight: 600;
+        padding: 2px 7px; border-radius: 6px; background: #fff; border: 1px solid #bbb; color: #185FA5; pointer-events: none; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 10px 16px; font-size: 13px; color: #555; }
+  button { padding: 6px 12px; border: 1px solid #aaa; background: #fff; border-radius: 6px; cursor: pointer; }
+  button:hover { background: #f0f0f0; }
+  .lg { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 6px 16px; padding: 0 16px 16px; font-size: 13px; color: #555; }
+  .lg b { color: #185FA5; margin-right: 6px; }
+  .sw { display: inline-block; width: 12px; height: 12px; border: 1px solid #999; border-radius: 2px; vertical-align: -2px; margin-right: 4px; }
+</style>
+</head>
+<body>
+<header><h1>Carreta Eletrocentro – Gerador + Trafo + Cubículo MT</h1></header>
+
+<div id="wrap"></div>
+
+<div class="bar">
+  <button id="bi">Ver por dentro</button>
+  <button id="bc">Condutores</button>
+  <button id="bsi">Sinais</button>
+  <button id="bf">Fluxo de energia</button>
+  <button id="bs">Virar lado</button>
+  <button id="br">Girar</button>
+  <span>Arraste para girar · roda do mouse para zoom</span>
+</div>
+
+<!-- LEGENDA: edite os textos aqui -->
+<div class="lg">
+  <span><b>1</b>Cabine (cavalo)</span>
+  <span><b>2</b>Grupo gerador 380 V, portas nos 2 lados</span>
+  <span><b>3</b>Cabine do trafo 1500 kVA (grade na parte baixa)</span>
+  <span><b>4</b>Coluna 3: transição de barras</span>
+  <span><b>5</b>Coluna 2: DJ1, CS1 (manopla), relé 7SJ85</span>
+  <span><b>6</b>Coluna 1: TCs, para-raios, divisores capacitivos</span>
+  <span><b>7</b>Caixa de saída de cabos para rede</span>
+  <span><b>8</b>Carretel de cabo MT → rede 13,8 kV</span>
+</div>
+
+<!-- LEGENDA DOS CONDUTORES -->
+<div class="lg">
+  <span><i class="sw" style="background:#c0392b"></i>L1 (vermelho) · <i class="sw" style="background:#f0f0f0"></i>L2 (branco) · <i class="sw" style="background:#7b4a2a"></i>L3 (marrom)</span>
+  <span><i class="sw" style="background:#c0392b"></i>Cabos BT 380 V gerador → trafo (escopo cliente)</span>
+  <span><i class="sw" style="background:#b87333"></i>Cordoalha Cu 50 mm² trafo → Col. 3</span>
+  <span><i class="sw" style="background:#c8873a"></i>Barramento Cu 30x10 mm, 630 A</span>
+  <span><i class="sw" style="background:#1a1a1a"></i>Cabos MT 13,8 kV via TDC → rede</span>
+  <span><i class="sw" style="background:#2e9b4f"></i>Aterramento: barra PE 30x5 mm</span>
+  <span><i class="sw" style="background:#7f77dd"></i>Sinais: trafo, relé, supervisão</span>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// =====================================================================
+//  CONFIGURAÇÃO – medidas em metros (aprox.). Altere aqui primeiro.
+//  Eixo X = comprimento da carreta (cabine à esquerda, carretel à direita)
+//  Eixo Y = altura | Eixo Z = largura (Z positivo = lado da foto)
+// =====================================================================
+const CFG = {
+  deckY: 1.25,          // altura do assoalho da carreta
+  carreta: { comp: 13.2, larg: 2.5 },
+
+  gerador:  { x: 3.3,  comp: 5.9, alt: 2.55, larg: 2.35, cor: 0xf2f2f2 },
+  trafo:    { x: 7.55, comp: 2.5, alt: 2.6,  larg: 2.3,  cor: 0x8d9398 },
+  cubiculo: { x: 10.3, comp: 2.1, alt: 2.3,  larg: 2.25, cor: 0x9aa0a5 },
+  carretel: { x: 12.2 },
+
+  // larguras das colunas MT (projeto VR: 450 / 850 / 650 mm)
+  colunas: { col3: 0.45, col2: 0.85, col1: 0.65 },
+
+  // posição das rodas (eixo X)
+  eixos: [0.5, 1.7, 8.6, 9.8, 11.0]
+};
+
+// ---------------------------------------------------------------------
+//  Cena básica
+// ---------------------------------------------------------------------
+const W = document.getElementById('wrap');
+const R = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+R.setPixelRatio(Math.min(devicePixelRatio, 2));
+R.setSize(W.clientWidth, W.clientHeight);
+W.appendChild(R.domElement);
+const S = new THREE.Scene();
+const C = new THREE.PerspectiveCamera(34, W.clientWidth / W.clientHeight, 0.1, 200);
+S.add(new THREE.AmbientLight(0xffffff, 0.62));
+const luz1 = new THREE.DirectionalLight(0xffffff, 0.65); luz1.position.set(6, 14, 12); S.add(luz1);
+const luz2 = new THREE.DirectionalLight(0xffffff, 0.25); luz2.position.set(-6, 8, -12); S.add(luz2);
+const G = new THREE.Group(); S.add(G);
+
+const cascas = [];   // peças que ficam transparentes em "Ver por dentro"
+const internos = []; // peças que só aparecem em "Ver por dentro"
+
+// Cria uma caixa: largura(X), altura(Y), profundidade(Z), posição x,y,z, cor
+// opções: { borda:false, casca:true, interno:true }
+function caixa(w, h, d, x, y, z, cor, o = {}) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshLambertMaterial({ color: cor }));
+  m.position.set(x, y, z); G.add(m);
+  if (o.borda !== false) {
+    const l = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry),
+      new THREE.LineBasicMaterial({ color: 0x222222, transparent: true, opacity: .3 }));
+    l.position.copy(m.position); G.add(l);
+  }
+  if (o.casca) cascas.push(m);
+  if (o.interno) { m.visible = false; internos.push(m); }
+  return m;
+}
+// Cria um cilindro: raio, altura, posição, cor, eixo ('z', 'x' ou vertical)
+function cilindro(r, h, x, y, z, cor, eixo, o = {}) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 20), new THREE.MeshLambertMaterial({ color: cor }));
+  m.position.set(x, y, z);
+  if (eixo === 'z') m.rotation.x = Math.PI / 2;
+  if (eixo === 'x') m.rotation.z = Math.PI / 2;
+  G.add(m);
+  if (o.casca) cascas.push(m);
+  if (o.interno) { m.visible = false; internos.push(m); }
+  return m;
+}
+
+const DY = CFG.deckY;
+
+// ---------------------------------------------------------------------
+//  1. CARRETA + CABINE
+// ---------------------------------------------------------------------
+caixa(CFG.carreta.comp, 0.22, CFG.carreta.larg, CFG.carreta.comp / 2, 1.1, 0, 0x2b2b2b);
+CFG.eixos.forEach(x => {
+  cilindro(0.5, 0.35, x, 0.5,  1.05, 0x1c1c1c, 'z');
+  cilindro(0.5, 0.35, x, 0.5, -1.05, 0x1c1c1c, 'z');
+});
+// saias laterais de alumínio
+[[2.0, 3.3], [9.6, 2.2], [12.2, 2.0]].forEach(([x, c]) => {
+  caixa(c, 0.8, 0.04, x, 0.6,  1.27, 0xb8b8b8);
+  caixa(c, 0.8, 0.04, x, 0.6, -1.27, 0xb8b8b8);
+});
+// cabine do caminhão
+caixa(2.4, 2.5, 2.5, -1.4, 2.0, 0, 0xeeeeee);
+caixa(0.06, 0.9, 2.0, -2.62, 2.6, 0, 0x9cc3e0, { borda: false }); // para-brisa
+cilindro(0.5, 0.35, -1.5, 0.5,  1.05, 0x1c1c1c, 'z');
+cilindro(0.5, 0.35, -1.5, 0.5, -1.05, 0x1c1c1c, 'z');
+
+// ---------------------------------------------------------------------
+//  2. GRUPO GERADOR (Tecnogera)
+// ---------------------------------------------------------------------
+const g = CFG.gerador;
+caixa(g.comp, g.alt, g.larg, g.x, DY + g.alt / 2, 0, g.cor);
+// grade do radiador (ponta voltada para o trafo)
+caixa(0.08, g.alt, g.larg, g.x + g.comp / 2 - 0.04, DY + g.alt / 2, 0, 0x1e1e1e, { borda: false });
+for (let i = 0; i < 9; i++)
+  caixa(0.1, 0.04, g.larg - 0.15, g.x + g.comp / 2 + 0.02, DY + 0.35 + i * 0.24, 0, 0x555555, { borda: false });
+// portas nos dois lados (s = +1 lado da foto, -1 lado oposto)
+[1, -1].forEach(s => {
+  [-1.9, -1.05, 0.4, 1.25].forEach(dx =>
+    caixa(0.8, 1.9, 0.03, g.x + dx, DY + 1.15, s * (g.larg / 2 + 0.015), 0xe4e4e4));
+  caixa(0.35, 0.6, 0.03, g.x + 2.1, DY + 1.9, s * (g.larg / 2 + 0.015), 0x2a2a2a, { borda: false }); // veneziana
+  caixa(0.5, 0.08, 0.03, g.x - 1.5, DY + 2.25, s * (g.larg / 2 + 0.015), 0xe8673a, { borda: false }); // logo
+});
+caixa(0.9, 1.0, 0.9, 0.85, DY + 0.5, 0, 0xd9d9d9); // caixa/bagageiro frontal
+
+// ---------------------------------------------------------------------
+//  3. CABINE DO TRANSFORMADOR
+// ---------------------------------------------------------------------
+const t = CFG.trafo;
+caixa(t.comp, t.alt, t.larg, t.x, DY + t.alt / 2, 0, t.cor, { casca: true });
+caixa(t.comp + 0.3, 0.1, t.larg + 0.3, t.x, DY + t.alt + 0.05, 0, 0x6f7479); // telhado
+[1, -1].forEach(s => {
+  caixa(1.6, 1.3, 0.06, t.x + 0.25, DY + 0.75, s * (t.larg / 2 + 0.03), 0x1d1d1d, { borda: false, casca: true }); // grade preta
+  caixa(1.0, 0.45, 0.05, t.x - 0.1, DY + 2.05, s * (t.larg / 2 + 0.02), 0x6a7075, { borda: false, casca: true }); // veneziana
+});
+// trafo por dentro
+caixa(1.6, 1.5, 1.2, t.x, DY + 0.95, 0, 0x5d6b75, { interno: true });                  // tanque
+for (let i = 0; i < 7; i++)
+  caixa(0.05, 1.2, 1.6, t.x - 0.7 + i * 0.23, DY + 0.9, 0, 0x7d8a93, { interno: true, borda: false }); // radiadores
+caixa(2.2, 0.4, 1.1, t.x, DY + 2.0, 0, 0xa0a7ac, { interno: true });                   // duto de cabos
+[-0.35, 0, 0.35].forEach(z =>
+  cilindro(0.07, 0.35, t.x + 0.95, DY + 1.85, z, 0x8b2b20, null, { interno: true }));  // buchas AT
+caixa(2.0, 0.12, 1.9, t.x, DY + 0.12, 0, 0x3a3a3a, { interno: true });                 // bacia de contenção
+
+// ---------------------------------------------------------------------
+//  4-7. CUBÍCULO DE MÉDIA TENSÃO (3 colunas)
+// ---------------------------------------------------------------------
+const m = CFG.cubiculo, col = CFG.colunas;
+const yC = DY + 0.2 + m.alt / 2;
+caixa(m.comp, m.alt, m.larg, m.x, yC, 0, m.cor, { casca: true });
+caixa(m.comp + 0.35, 0.1, m.larg + 0.35, m.x, DY + 0.3 + m.alt + 0.02, 0, 0x6f7479); // telhado
+caixa(m.comp, 0.2, m.larg - 0.05, m.x, DY + 0.1, 0, 0x2f2f2f);                        // base skid
+
+// centro de cada coluna (Col 3 junto ao trafo, Col 1 junto ao carretel)
+const inicio = m.x - m.comp / 2;
+const c3 = inicio + col.col3 / 2;
+const c2 = inicio + col.col3 + col.col2 / 2;
+const c1 = inicio + col.col3 + col.col2 + col.col1 / 2;
+const zf = m.larg / 2 + 0.015; // face frontal (lado da foto)
+
+// divisões das colunas na porta
+[inicio + col.col3, inicio + col.col3 + col.col2].forEach(x =>
+  caixa(0.02, m.alt - 0.1, 0.02, x, yC, zf, 0x333333, { borda: false, casca: true }));
+// Coluna 2 – caixa de comando, placa amarela, manopla da CS1
+caixa(0.6, 0.5, 0.03, c2, DY + 1.95, zf, 0x2b3a4a, { borda: false, casca: true });
+caixa(0.16, 0.16, 0.03, c2 - 0.2, DY + 1.05, zf, 0xf2c230, { borda: false, casca: true });
+cilindro(0.04, 0.22, c2 + 0.1, DY + 0.95, zf + 0.1, 0x222222, 'z', { casca: true });
+caixa(0.06, 0.18, 0.06, c2 + 0.1, DY + 0.86, zf + 0.2, 0x222222, { borda: false, casca: true });
+// puxadores das portas Col 3 e Col 1
+[c3, c1].forEach(x => caixa(0.03, 0.2, 0.03, x + 0.12, DY + 1.3, zf + 0.01, 0x222222, { borda: false, casca: true }));
+
+// (Coluna 3: barramentos agora desenhados na seção CONDUTORES)
+// por dentro – Coluna 2: DJ1, TPs, CS1
+[-0.3, 0, 0.3].forEach(z => {
+  cilindro(0.08, 0.45, c2, DY + 0.9, z, 0x2a2a2a, null, { interno: true });       // polos DJ1
+  caixa(0.14, 0.18, 0.14, c2 + 0.15, DY + 2.0, z, 0x8b3a2a, { interno: true });   // TP 1/2/3
+  caixa(0.14, 0.16, 0.14, c2 - 0.15, DY + 0.45, z, 0x8b3a2a, { interno: true });  // TP 4/5/6
+});
+caixa(0.04, 0.4, 0.8, c2, DY + 1.45, 0, 0x2f5fbf, { interno: true });             // CS1
+// por dentro – Coluna 1: TCs e para-raios
+[-0.3, 0, 0.3].forEach(z => {
+  caixa(0.2, 0.2, 0.2, c1, DY + 1.95, z, 0x9c3b2a, { interno: true });                // TCs
+  cilindro(0.07, 0.35, c1, DY + 0.6, z, 0x5b7fd6, null, { interno: true });         // para-raios
+});
+// 7. caixa de saída de cabos (ponta voltada para o carretel)
+caixa(0.35, 0.85, 0.95, m.x + m.comp / 2 + 0.18, DY + 1.0, 0, m.cor);
+
+// ---------------------------------------------------------------------
+//  8. CARRETEL
+// ---------------------------------------------------------------------
+const rx = CFG.carretel.x;
+const rg = new THREE.Group(); G.add(rg); rg.position.set(rx, DY + 1.05, 0);
+[-0.55, 0.55].forEach(z => {
+  for (let k = 0; k < 2; k++) {
+    const anel = new THREE.Mesh(new THREE.TorusGeometry(0.85 - k * 0.25, 0.04, 8, 32),
+      new THREE.MeshLambertMaterial({ color: 0xb5b5b5 }));
+    anel.position.z = z; rg.add(anel);
+  }
+});
+const nucleo = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 1.1, 24), new THREE.MeshLambertMaterial({ color: 0x8f8f8f }));
+nucleo.rotation.x = Math.PI / 2; rg.add(nucleo);
+[[-0.75, 0.7], [0.75, 0.7], [-0.75, -0.7], [0.75, -0.7]].forEach(([dx, z]) => {
+  const perna = caixa(0.08, 1.9, 0.08, rx + dx * 0.6, DY + 0.95, z, 0xb5b5b5, { borda: false });
+  perna.rotation.z = dx > 0 ? 0.35 : -0.35;
+});
+caixa(1.6, 0.12, 1.6, rx, DY + 0.06, 0, 0xb5b5b5, { borda: false });
+
+// =====================================================================
+//  CONDUTORES – conforme projeto VR 24.1793.0011 rev.03
+//  - BT gerador → trafo: escopo cliente (bitola/quantidade não constam no projeto VR)
+//  - Trafo → Col.3: cordoalha de cobre 50 mm² c/ termo-retrátil (pág. 10, item 22)
+//  - Col.3 → Col.2 → Col.1: barramento de cobre 30x10 mm, 630 A (pág. 30)
+//  - Col.1 → rede: buchas integrais 15 kV 200 A + TDC Chardon, cabos MT (escopo Essencial)
+//  - Terra: barra PE 30x5 mm + barra independente dos para-raios (pág. 30/31)
+//  - Identificação das fases (pág. 40): L1 vermelho, L2 branco, L3 marrom, terra verde
+// =====================================================================
+const COR = {
+  L1: 0xc0392b, L2: 0xf0f0f0, L3: 0x7b4a2a,
+  cobre: 0xc8873a, cordoalha: 0xb87333,
+  caboMT: 0x1a1a1a, terra: 0x2e9b4f, sinal: 0x7f77dd
+};
+const FASES = [ { z: -0.3, cor: COR.L1 }, { z: 0, cor: COR.L2 }, { z: 0.3, cor: COR.L3 } ];
+const condutores = new THREE.Group(); G.add(condutores); condutores.visible = false;
+const sinais = new THREE.Group(); G.add(sinais); sinais.visible = false;
+
+// Segmento reto entre dois pontos [x,y,z]. forma 'chato' = barra, senão = cabo redondo
+function segmento(a, b, esp, cor, grupo, forma) {
+  const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b);
+  const dir = new THREE.Vector3().subVectors(B, A); const len = dir.length();
+  if (len < 1e-4) return;
+  const geo = forma === 'chato' ? new THREE.BoxGeometry(esp * 3, len, esp) : new THREE.CylinderGeometry(esp, esp, len, 10);
+  const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: cor }));
+  mesh.position.copy(A).add(B).multiplyScalar(0.5);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+  grupo.add(mesh);
+}
+// Percurso com vários pontos (cotovelos em ângulo reto)
+function percurso(pts, esp, cor, grupo, forma) {
+  for (let i = 0; i < pts.length - 1; i++) segmento(pts[i], pts[i + 1], esp, cor, grupo, forma);
+}
+
+const gFim = g.x + g.comp / 2;            // ponta do gerador voltada ao trafo
+const tIni = t.x - t.comp / 2;            // início da cabine do trafo
+const sx = m.x + m.comp / 2 + 0.18;       // centro da caixa de saída de cabos
+const yDuto = DY + 2.0, yTopo = DY + 2.3, yBase = DY + 0.32;
+
+FASES.forEach(f => {
+  const z = f.z;
+
+  // ---- A) BT 380 V: gerador → buchas BT do trafo (passando pelo duto) ----
+  [-0.06, -0.02, 0.02, 0.06].forEach(dz => {   // cabos em paralelo por fase (ilustrativo)
+    percurso([
+      [gFim, DY + 1.0, z + dz], [tIni + 0.15, DY + 1.0, z + dz],
+      [tIni + 0.15, yDuto, z + dz], [t.x - 0.55, yDuto, z + dz], [t.x - 0.55, DY + 1.75, z + dz]
+    ], 0.018, f.cor, condutores);
+  });
+  // bucha BT (X1/X2/X3)
+  const bt = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.2, 16), new THREE.MeshLambertMaterial({ color: 0x8b2b20 }));
+  bt.position.set(t.x - 0.55, DY + 1.7, z); condutores.add(bt);
+
+  // ---- B) Cordoalha 50 mm²: bucha AT do trafo → topo do barramento da Coluna 3 ----
+  percurso([
+    [t.x + 0.95, DY + 2.03, z], [t.x + 0.95, yTopo, z], [c3, yTopo, z], [c3, DY + 2.1, z]
+  ], 0.022, COR.cordoalha, condutores);
+
+  // ---- C) Barramento 30x10 mm: Col.3 ↓ → Col.2 (DJ1 → CS1) ↑ → Col.1 ↓ → saída ----
+  percurso([[c3, DY + 2.1, z], [c3, yBase, z], [c2, yBase, z], [c2, DY + 0.675, z]], 0.012, COR.cobre, condutores, 'chato'); // até DJ1 (embaixo)
+  percurso([[c2, DY + 1.125, z], [c2, DY + 1.25, z]], 0.012, COR.cobre, condutores, 'chato');   // DJ1 → CS1
+  percurso([[c2, DY + 1.65, z], [c2, yTopo, z], [c1, yTopo, z], [c1, DY + 1.0, z], [sx + 0.12, DY + 1.0, z]],
+           0.012, COR.cobre, condutores, 'chato');                                                // CS1 → Col.1 (passa nos TCs) → saída
+  // fita de identificação da fase em cada coluna
+  [[c3, DY + 1.5], [c2, DY + 2.1], [c1, DY + 1.6]].forEach(([x, y]) =>
+    caixaGrupo(0.05, 0.06, 0.02, x, y, z, f.cor));
+
+  // derivações para TPs (cabo fino) e para-raios
+  percurso([[c2, DY + 2.0, z], [c2 + 0.15, DY + 2.0, z]], 0.01, f.cor, condutores);                       // TP 1/2/3 (lado rede)
+  percurso([[c2, DY + 0.6, z], [c2 - 0.15, DY + 0.6, z], [c2 - 0.15, DY + 0.53, z]], 0.01, f.cor, condutores); // TP 4/5/6 (lado gerador)
+  percurso([[c1, DY + 1.0, z], [c1, DY + 0.775, z]], 0.01, f.cor, condutores);                             // para-raios
+
+  // ---- D) Bucha integral + TDC na caixa de saída → cabos MT → carretel → rede ----
+  const bucha = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.14, 14), new THREE.MeshLambertMaterial({ color: 0x5a3a2a }));
+  bucha.rotation.z = Math.PI / 2; bucha.position.set(sx + 0.2, DY + 1.0, z); condutores.add(bucha);
+  percurso([
+    [sx + 0.27, DY + 1.0, z], [sx + 0.32, DY + 1.0, z], [sx + 0.32, DY + 0.55, z], [rx, DY + 0.55, z]
+  ], 0.025, COR.caboMT, condutores);
+  percurso([
+    [rx + 0.5, DY + 1.05, z], [rx + 1.1, DY + 1.05, z], [rx + 1.4, 0.15, z], [rx + 3.5, 0.05, z]
+  ], 0.025, COR.caboMT, condutores);   // saída do carretel para a rede aérea
+});
+
+// helper: caixinha dentro do grupo de condutores (fitas de identificação)
+function caixaGrupo(w, h, d, x, y, z, cor) {
+  const mm = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshLambertMaterial({ color: cor }));
+  mm.position.set(x, y, z); condutores.add(mm);
+}
+
+// ---- E) Aterramento: barra PE 30x5 mm + barra dos para-raios + interligações ----
+percurso([[c1, DY + 0.42, -0.3], [c1, DY + 0.42, 0.3]], 0.01, COR.terra, condutores, 'chato');           // barra independente PR
+percurso([[c1, DY + 0.42, -0.3], [c1, DY + 0.26, -0.9]], 0.012, COR.terra, condutores);                    // PR → PE
+percurso([[m.x - m.comp / 2 + 0.05, DY + 0.26, -0.9], [m.x + m.comp / 2 - 0.05, DY + 0.26, -0.9]],
+         0.01, COR.terra, condutores, 'chato');                                                             // barra PE geral
+percurso([[t.x + 0.8, DY + 0.3, -0.5], [t.x + 0.8, DY + 0.26, -0.9], [m.x - m.comp / 2 + 0.05, DY + 0.26, -0.9]],
+         0.012, COR.terra, condutores);                                                                     // tanque trafo → PE
+percurso([[gFim, DY + 0.26, -0.9], [t.x + 0.8, DY + 0.26, -0.9]], 0.012, COR.terra, condutores);          // gerador → PE
+percurso([[m.x, DY + 0.26, -0.9], [m.x, DY + 0.26, -1.3], [m.x, 0.0, -1.3], [m.x, 0.0, -2.0]],
+         0.015, COR.terra, condutores);                                                                     // descida para malha/haste local
+const haste = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.6, 10), new THREE.MeshLambertMaterial({ color: COR.terra }));
+haste.position.set(m.x, -0.25, -2.0); condutores.add(haste);
+
+// ---- F) Sinais e controle (caixa de entrada/saída de sinais gerador/trafo) ----
+const csx = m.x - m.comp / 2 - 0.12;
+caixa(0.2, 0.5, 0.45, csx, DY + 1.0, 0.6, 0x9aa0a5);                                   // caixa de sinais (TM1/TM2)
+percurso([[t.x + 0.6, DY + 1.75, 0.5], [t.x + 1.1, DY + 1.75, 0.5], [t.x + 1.1, DY + 1.0, 0.6], [csx - 0.1, DY + 1.0, 0.6]],
+         0.015, COR.sinal, sinais);                                                     // relé do trafo (nível/pressão/temp.) → caixa
+percurso([[csx + 0.1, DY + 1.1, 0.6], [c2, DY + 1.1, 0.6], [c2, DY + 1.95, 0.6], [c2, DY + 1.95, 1.05]],
+         0.015, COR.sinal, sinais);                                                     // caixa → relé 7SJ85 (Col.2)
+percurso([[csx, DY + 0.75, 0.6], [csx, DY + 0.15, 0.6], [gFim - 0.3, DY + 0.15, 0.95], [gFim - 0.3, DY + 0.8, 0.95]],
+         0.015, COR.sinal, sinais);                                                     // supervisão remota → QTA do gerador
+
+// ---------------------------------------------------------------------
+//  FLUXO DE ENERGIA (pontos por onde a linha laranja passa)
+// ---------------------------------------------------------------------
+const caminho = [
+  [g.x, DY + 2.9], [t.x - 0.3, DY + 2.9], [t.x + 0.9, DY + 2.9],
+  [c3, DY + 2.75], [c2, DY + 2.75], [c1, DY + 2.75],
+  [rx, DY + 2.2], [rx + 1.4, DY + 1.2]
+].map(([x, y]) => new THREE.Vector3(x, y, 0));
+const curva = new THREE.CatmullRomCurve3(caminho);
+const fluxo = new THREE.Group(); G.add(fluxo); fluxo.visible = false;
+fluxo.add(new THREE.Mesh(new THREE.TubeGeometry(curva, 80, 0.045, 8), new THREE.MeshBasicMaterial({ color: 0xef9f27 })));
+const bolinhas = [];
+for (let i = 0; i < 7; i++) {
+  const b = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 12), new THREE.MeshBasicMaterial({ color: 0xe8593c }));
+  fluxo.add(b); bolinhas.push(b);
+}
+
+G.position.x = -5.5; // centraliza a carreta na tela
+
+// ---------------------------------------------------------------------
+//  ETIQUETAS NUMERADAS [número, x, y]
+// ---------------------------------------------------------------------
+const etiquetas = [
+  [1, -1.4, 3.5], [2, g.x, DY + 3.0], [3, t.x, DY + 3.05],
+  [4, c3, DY + 2.8], [5, c2, DY + 3.1], [6, c1, DY + 2.8],
+  [7, m.x + m.comp / 2 + 0.18, DY + 1.6], [8, rx, DY + 2.1]
+].map(([n, x, y]) => {
+  const e = document.createElement('div'); e.className = 'lb'; e.textContent = n; W.appendChild(e);
+  return { e, v: new THREE.Vector3(x, y, 0.3) };
+});
+
+// ---------------------------------------------------------------------
+//  CONTROLES (botões, mouse, zoom)
+// ---------------------------------------------------------------------
+let aberto = false;
+function verPorDentro(v) {
+  aberto = v;
+  cascas.forEach(p => { p.material.transparent = aberto; p.material.opacity = aberto ? 0.12 : 1; p.material.depthWrite = !aberto; });
+  internos.forEach(p => p.visible = aberto);
+}
+document.getElementById('bi').onclick = () => verPorDentro(!aberto);
+// ao ligar condutores ou sinais, abre as cabines automaticamente
+document.getElementById('bc').onclick = () => { condutores.visible = !condutores.visible; if (condutores.visible) verPorDentro(true); };
+document.getElementById('bsi').onclick = () => { sinais.visible = !sinais.visible; if (sinais.visible) verPorDentro(true); };
+let ang = 0.55, elev = 0.28, dist = 20, auto = false, arrastando = false, px, py;
+const el = R.domElement;
+el.addEventListener('pointerdown', e => { arrastando = true; px = e.clientX; py = e.clientY; el.setPointerCapture(e.pointerId); });
+el.addEventListener('pointermove', e => {
+  if (!arrastando) return;
+  ang -= (e.clientX - px) * 0.008;
+  elev = Math.max(0.03, Math.min(1.35, elev + (e.clientY - py) * 0.006));
+  px = e.clientX; py = e.clientY;
+});
+el.addEventListener('pointerup', () => arrastando = false);
+el.addEventListener('wheel', e => { e.preventDefault(); dist = Math.max(8, Math.min(40, dist + e.deltaY * 0.01)); }, { passive: false });
+document.getElementById('bf').onclick = () => fluxo.visible = !fluxo.visible;
+document.getElementById('br').onclick = () => auto = !auto;
+document.getElementById('bs').onclick = () => ang += Math.PI;
+addEventListener('resize', () => {
+  R.setSize(W.clientWidth, W.clientHeight);
+  C.aspect = W.clientWidth / W.clientHeight; C.updateProjectionMatrix();
+});
+
+const tmp = new THREE.Vector3(); let tempo = 0;
+(function animar() {
+  tempo += 0.004; if (auto) ang += 0.004;
+  C.position.set(dist * Math.cos(elev) * Math.sin(ang), dist * Math.sin(elev) + 2.2, dist * Math.cos(elev) * Math.cos(ang));
+  C.lookAt(0, 2.2, 0);
+  if (fluxo.visible) bolinhas.forEach((b, i) => b.position.copy(curva.getPoint((tempo + i / 7) % 1)));
+  G.updateMatrixWorld();
+  etiquetas.forEach(o => {
+    tmp.copy(o.v).applyMatrix4(G.matrixWorld).project(C);
+    o.e.style.left = ((tmp.x + 1) / 2 * W.clientWidth) + 'px';
+    o.e.style.top = ((1 - tmp.y) / 2 * W.clientHeight) + 'px';
+    o.e.style.display = tmp.z < 1 ? 'block' : 'none';
+  });
+  R.render(S, C);
+  requestAnimationFrame(animar);
+})();
+</script>
+</body>
+</html>
